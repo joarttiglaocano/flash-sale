@@ -107,6 +107,11 @@ const losers = rows.filter((row) => row.outcome === 'lost');
 const otherWinners = [...winnerSet].filter((user) => !contenderSet.has(user));
 const oversold = initialStock !== null && winnerSet.size > initialStock;
 
+// Who decided each winner, from the order's provenance stamp. In a run with a
+// mid-sale failover this splits: `redis` before the kill, `postgres` after.
+const byRedis = [...winnerSet].filter((u) => decidedBy.get(u) === 'redis').length;
+const byPostgres = [...winnerSet].filter((u) => decidedBy.get(u) === 'postgres').length;
+
 const csv = [
   'userId,outcome,decided_by',
   ...rows.map((row) => `${row.userId},${row.outcome},${row.decidedBy}`),
@@ -119,6 +124,7 @@ const report = {
   contenders: totalUsers,
   winners: winners.map((row) => row.userId),
   losers: losers.map((row) => row.userId),
+  decidedBy: { redis: byRedis, postgres: byPostgres },
   otherWinners,
   oversold,
   crossCheck: {
@@ -133,19 +139,23 @@ await writeFile(
 );
 
 const line = (label: string, value: string | number) =>
-  `  ${label.padEnd(16)}${String(value).padStart(9)}`;
+  `  ${label.padEnd(20)}${String(value).padStart(7)}`;
 console.log(
   [
     `\nWinners / losers — sale "${config.saleId}"`,
     line('initial stock', initialStock ?? '?'),
     line('contenders', totalUsers),
     line('winners', winners.length),
+    line('  decided by redis', byRedis),
+    line('  decided by postgres', byPostgres),
     line('losers', losers.length),
-    line('redis winners', redisWinners ? redisWinners.size : 'down'),
-    line('postgres orders', pgRows.rowCount ?? 0),
-    line('union winners', winnerSet.size),
     line('oversold', oversold ? 'YES' : 'no'),
-    otherWinners.length ? line('other winners', otherWinners.length) : '',
+    '',
+    '  cross-check',
+    line('  redis purchaser set', redisWinners ? redisWinners.size : 'down'),
+    line('  postgres orders', pgRows.rowCount ?? 0),
+    line('  union', winnerSet.size),
+    otherWinners.length ? line('  other winners', otherWinners.length) : '',
     `\n  → ${resolve(k6Dir, 'report.csv')}`,
     `  → ${resolve(k6Dir, 'report.json')}`,
   ]
