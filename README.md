@@ -162,7 +162,14 @@ npm test          # 46 tests, all against real Redis + Postgres (docker compose)
 npm run seed -- --force    # reset to full stock
 npm run stress             # k6 via Docker (grafana/k6), no local install
 npm run verify             # invariant checker reads Redis + k6 summary
+npm run report             # writes k6/report.csv — every winner and loser by id
 ```
+
+`report` reconstructs the full field of contenders from k6's deterministic ids
+(losers are never stored — only winners are) and writes `k6/report.csv`
+(`userId, outcome, decided_by`) plus a summary. `decided_by` is `redis` for a
+normal run; after a failover it splits `redis`/`postgres`, since a winner is
+anyone holding an item in *either* store.
 
 | Wave | Expected | Observed |
 |---|---|---|

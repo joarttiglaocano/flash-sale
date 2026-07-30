@@ -20,7 +20,8 @@
     "verify": "npm run verify --workspace=server --",
     "stress": "docker run --rm -i --add-host=host.docker.internal:host-gateway -v ./k6:/scripts -e BASE_URL=http://host.docker.internal:3000 grafana/k6 run /scripts/flash-sale.js",
     "verify:pg": "npm run verify:pg --workspace=server",
-    "failback": "npm run failback --workspace=server"
+    "failback": "npm run failback --workspace=server",
+    "report": "npm run report --workspace=server"
   },
   "engines": {
     "node": ">=22"

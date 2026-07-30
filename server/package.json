@@ -16,7 +16,8 @@
     "failback": "node --env-file-if-exists=../.env --import tsx scripts/failback.ts",
     "seed": "node --env-file-if-exists=../.env --import tsx scripts/seed.ts",
     "verify": "node --env-file-if-exists=../.env --import tsx scripts/verify.ts",
-    "verify:pg": "node --env-file-if-exists=../.env --import tsx scripts/verify-pg.ts"
+    "verify:pg": "node --env-file-if-exists=../.env --import tsx scripts/verify-pg.ts",
+    "report": "node --env-file-if-exists=../.env --import tsx scripts/report.ts"
   },
   "dependencies": {
     "cors": "^2.8.5",

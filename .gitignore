@@ -7,3 +7,7 @@ dist/
 
 # stress test output
 k6/summary.json
+
+# generated reports
+k6/report.json
+k6/report.csv
