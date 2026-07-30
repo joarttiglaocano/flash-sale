@@ -3,7 +3,12 @@ import { writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { loadConfig } from '../src/config.js';
 import { createPgPool } from '../src/pg.js';
-import { awaitReady, createRedisClient, saleKeys } from '../src/redis.js';
+import {
+  awaitReady,
+  createRedisClient,
+  saleKeys,
+  type SaleRedis,
+} from '../src/redis.js';
 
 /**
  * Post-run winners/losers report. Writes k6/report.csv (one row per contender:
@@ -13,11 +18,13 @@ import { awaitReady, createRedisClient, saleKeys } from '../src/redis.js';
  * Losers are never stored anywhere — only winners are — so the field of
  * contenders is rebuilt from the load's deterministic id scheme and the winners
  * subtracted. Defaults match the k6 stress script (k6-user-0 ..); override for a
- * custom load: TOTAL_USERS=15000 USER_TEMPLATE='buyer-{i}@example.com'.
+ * custom load: TOTAL_USERS=10000 USER_TEMPLATE='flap-{i}@demo.com'.
  *
- * A winner is anyone holding an item in EITHER store — the Redis purchaser set
- * or the Postgres orders table — so the list stays complete across a failover,
- * where neither store alone has everyone.
+ * Postgres is the authoritative source of winners here: after a failover it
+ * holds everyone, and it is up whenever the sale is. The Redis purchaser set is
+ * read best-effort — it fills the small window of wins not yet drained during
+ * normal operation, but the report still works with Redis down (the whole point
+ * of the system), noting it as unavailable.
  */
 const totalUsers = Number(process.env.TOTAL_USERS ?? 10000);
 const template = process.env.USER_TEMPLATE ?? 'k6-user-{i}';
@@ -35,19 +42,41 @@ if (!k6Dir) {
 
 const config = loadConfig();
 const keys = saleKeys(config.saleId);
-const redis = await awaitReady(createRedisClient(config.redisUrl));
 const pool = createPgPool(config.databaseUrl);
 
-const rawInitial = await redis.get(keys.initialStock);
-const initialStock = rawInitial === null ? null : Number(rawInitial);
-
-const redisWinners = new Set(await redis.smembers(keys.purchasers));
+// Postgres is authoritative and always up when the sale is.
+const sale = await pool.query<{ initial_stock: number }>(
+  'SELECT initial_stock FROM sales WHERE sale_id = $1',
+  [config.saleId],
+);
+const initialStock = sale.rows[0]?.initial_stock ?? null;
 const pgRows = await pool.query<{ user_id: string; stream_id: string }>(
   'SELECT user_id, stream_id FROM orders WHERE sale_id = $1',
   [config.saleId],
 );
 await pool.end();
-await redis.quit();
+
+// Best-effort Redis read: a bounded attempt so the report still runs when Redis
+// is down (e.g. right after a failover). Returns null if Redis is unreachable.
+async function readRedisWinners(): Promise<Set<string> | null> {
+  const redis: SaleRedis = createRedisClient(config.redisUrl);
+  try {
+    // Wait for the connection, but bounded — a dead Redis never becomes ready,
+    // so the timeout is what lets the report proceed on Postgres alone.
+    await Promise.race([
+      awaitReady(redis),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('redis timeout')), 2500),
+      ),
+    ]);
+    return new Set(await redis.smembers(keys.purchasers));
+  } catch {
+    return null;
+  } finally {
+    redis.disconnect();
+  }
+}
+const redisWinners = await readRedisWinners();
 
 // A pg:<epoch> stamp means Postgres decided the order; anything else is a
 // drained Redis win. A Redis winner not yet in orders still counts as redis.
@@ -55,13 +84,15 @@ const decidedBy = new Map<string, string>();
 for (const row of pgRows.rows) {
   decidedBy.set(row.user_id, row.stream_id.startsWith('pg:') ? 'postgres' : 'redis');
 }
-for (const user of redisWinners) {
-  if (!decidedBy.has(user)) decidedBy.set(user, 'redis');
+if (redisWinners) {
+  for (const user of redisWinners) {
+    if (!decidedBy.has(user)) decidedBy.set(user, 'redis');
+  }
 }
 
 const winnerSet = new Set([
-  ...redisWinners,
   ...pgRows.rows.map((row) => row.user_id),
+  ...(redisWinners ?? []),
 ]);
 const contenders = Array.from({ length: totalUsers }, (_, i) => idFor(i));
 const contenderSet = new Set(contenders);
@@ -73,9 +104,7 @@ const rows = contenders.map((userId) => ({
 }));
 const winners = rows.filter((row) => row.outcome === 'won');
 const losers = rows.filter((row) => row.outcome === 'lost');
-// Winners outside the reconstructed field (a manual buyer, or a different load).
 const otherWinners = [...winnerSet].filter((user) => !contenderSet.has(user));
-
 const oversold = initialStock !== null && winnerSet.size > initialStock;
 
 const csv = [
@@ -93,7 +122,7 @@ const report = {
   otherWinners,
   oversold,
   crossCheck: {
-    redisWinners: redisWinners.size,
+    redisWinners: redisWinners ? redisWinners.size : 'redis unavailable',
     postgresOrders: pgRows.rowCount ?? 0,
     unionWinners: winnerSet.size,
   },
@@ -103,22 +132,20 @@ await writeFile(
   `${JSON.stringify(report, null, 2)}\n`,
 );
 
-const row = (label: string, value: string | number) =>
-  `  ${label.padEnd(16)}${String(value).padStart(7)}`;
+const line = (label: string, value: string | number) =>
+  `  ${label.padEnd(16)}${String(value).padStart(9)}`;
 console.log(
   [
     `\nWinners / losers — sale "${config.saleId}"`,
-    row('initial stock', initialStock ?? '?'),
-    row('contenders', totalUsers),
-    row('winners', winners.length),
-    row('losers', losers.length),
-    row('redis winners', redisWinners.size),
-    row('postgres orders', pgRows.rowCount ?? 0),
-    row('union winners', winnerSet.size),
-    `  ${'oversold'.padEnd(16)}${(oversold ? 'YES' : 'no').padStart(7)}`,
-    otherWinners.length
-      ? row('other winners', otherWinners.length)
-      : '',
+    line('initial stock', initialStock ?? '?'),
+    line('contenders', totalUsers),
+    line('winners', winners.length),
+    line('losers', losers.length),
+    line('redis winners', redisWinners ? redisWinners.size : 'down'),
+    line('postgres orders', pgRows.rowCount ?? 0),
+    line('union winners', winnerSet.size),
+    line('oversold', oversold ? 'YES' : 'no'),
+    otherWinners.length ? line('other winners', otherWinners.length) : '',
     `\n  → ${resolve(k6Dir, 'report.csv')}`,
     `  → ${resolve(k6Dir, 'report.json')}`,
   ]
