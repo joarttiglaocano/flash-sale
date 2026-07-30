@@ -1,0 +1,39 @@
+{
+  "name": "@flash-sale/server",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "node --env-file-if-exists=../.env --import tsx --watch src/server.ts",
+    "start": "node --env-file-if-exists=../.env dist/server.js",
+    "build": "tsc -p tsconfig.build.json && mkdir -p dist/lua && cp src/lua/purchase.lua dist/lua/",
+    "lint": "tsc --noEmit",
+    "test": "vitest run",
+    "dev:consumer": "node --env-file-if-exists=../.env --import tsx --watch src/consumer/main.ts",
+    "consumer": "node --env-file-if-exists=../.env dist/consumer/main.js",
+    "migrate": "node --env-file-if-exists=../.env --import tsx scripts/migrate.ts",
+    "rebuild": "node --env-file-if-exists=../.env --import tsx scripts/rebuild.ts",
+    "failback": "node --env-file-if-exists=../.env --import tsx scripts/failback.ts",
+    "seed": "node --env-file-if-exists=../.env --import tsx scripts/seed.ts",
+    "verify": "node --env-file-if-exists=../.env --import tsx scripts/verify.ts",
+    "verify:pg": "node --env-file-if-exists=../.env --import tsx scripts/verify-pg.ts"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^5.1.0",
+    "ioredis": "^5.6.1",
+    "pg": "^8.22.0",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.3",
+    "@types/node": "^22.15.0",
+    "@types/pg": "^8.20.0",
+    "@types/supertest": "^6.0.3",
+    "supertest": "^7.1.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.8.0",
+    "vitest": "^3.2.0"
+  }
+}
