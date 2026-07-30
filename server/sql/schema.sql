@@ -1,11 +1,10 @@
--- Durable system of record for the flash sale (v2), and the fallback
--- decider's own state (v3). Idempotent DDL: safe to run on every
--- `npm run migrate`.
+-- Durable system of record for the flash sale, plus the fallback decider's
+-- own state. Idempotent DDL: safe to run on every `npm run migrate`.
 
 -- One row per seeded sale. Makes Postgres sufficient to rebuild Redis
 -- (rebuild needs initial stock + window, not just the winners).
--- `remaining` is the live counter the v3 Postgres allocator decrements
--- when Postgres is the decider; the redis path does not touch it.
+-- `remaining` is the live counter the Postgres allocator decrements when
+-- Postgres is the decider; the Redis path does not touch it.
 CREATE TABLE IF NOT EXISTS sales (
   sale_id       text        PRIMARY KEY,
   initial_stock integer     NOT NULL CHECK (initial_stock > 0),
@@ -15,10 +14,10 @@ CREATE TABLE IF NOT EXISTS sales (
   seeded_at     timestamptz NOT NULL DEFAULT now()
 );
 
--- Which store decides purchases right now (v3). Exactly one decider at a
--- time is THE v3 invariant; every transition rule exists to keep it true.
--- epoch increments on each failback to a freshly rebuilt Redis, so an API
--- instance still talking to a discarded old Redis can be fenced out.
+-- Which store decides purchases right now. Exactly one decider at a time is
+-- THE invariant; every transition rule exists to keep it true. epoch
+-- increments on each failback to a freshly rebuilt Redis, so an API instance
+-- still talking to a discarded old Redis can be fenced out.
 CREATE TABLE IF NOT EXISTS control (
   sale_id    text        PRIMARY KEY,
   allocator  text        NOT NULL DEFAULT 'redis'
@@ -41,11 +40,10 @@ CREATE TABLE IF NOT EXISTS orders (
   CONSTRAINT orders_one_per_user UNIQUE (sale_id, user_id)
 );
 
--- v2 → v3 upgrade path for `sales.remaining`: add the column to existing
--- databases, backfill from what the durable store already knows (initial
--- minus orders won), then lock the invariants in. Sits AFTER the orders
--- table so the backfill works on a fresh database too. Each statement
--- no-ops on re-run.
+-- Ensure `sales.remaining` exists and is constrained: add the column,
+-- backfill it from what the durable store already knows (initial minus orders
+-- won), then lock the invariant in. Sits AFTER the orders table so the
+-- backfill works on a fresh database too. Each statement no-ops on re-run.
 ALTER TABLE sales ADD COLUMN IF NOT EXISTS remaining integer;
 UPDATE sales
    SET remaining = initial_stock -
